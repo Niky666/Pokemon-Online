@@ -1,0 +1,191 @@
+Pokemon-Online
+==============
+if (typeof comm === "undefined") {
+    comm = (function (antiDosSettings, autoConnect) {
+        var responded = [],
+            local = this,
+            eventHandlers = {},
+            antiDosTimers = {},
+            timer = sys.setTimer(function () {
+                clearAntiDosTimers();
+            }, 60000, true);
+        
+        function _antidosSetting(setting, defaultValue) {
+            return local.antidos[setting] || antiDosSettings[setting] || defaultValue;
+        }
+        
+        function attach(event, func, thisArg) {
+            sys.setTimer(function () {
+                var old = script[event];
+
+                if (!thisArg) {
+                    thisArg = null;
+                }
+
+                script[event] = function () {
+                    if (func.apply(thisArg, [].slice.call(arguments)) !== true && old) {
+                        old.apply(null, [].slice.call(arguments));
+                    }
+                };
+            }, 1, false);
+
+            return local;
+        }
+
+        function hasResponded(src) {
+            return responded.indexOf(src) !== -1;
+        }
+
+        function clearAntiDosTimers () {
+            var x;
+            for (x in antiDosTimers) {
+                if (antiDosTimers.hasOwnProperty(x)) {
+                    antiDosTimers[x].messagesPerMinute = 0;
+                }
+            }
+        }
+        
+        function _tell(src, event, content) {
+            var localArguments = arguments;
+
+            if (eventHandlers[event]) {
+                eventHandlers[event].forEach(function (value, index, array) {
+                    value.apply(null, [src].concat([].slice.call(localArguments, 2)));
+                });
+            }
+
+            return local;
+        }
+        
+        function emit(src, event, content) {
+            if (!hasResponded(src)) {
+                return local;
+            }
+
+            if (Array.isArray(content)) {
+                content = "//" + content.map(function (value, index, array) {
+                    return value.replace(/\/\//g, "%2F%2F");
+                }).join("//");
+            } else {
+                if (content) {
+                    content = "//" + content.replace(/\/\//g, "%2F%2F");
+                } else {
+                    content = "";
+                }
+            }
+            
+            sys.sendMessage(src, "comm:" + event + content);
+
+            return local;
+        }
+
+        function listen(event, handler) {
+            if (!eventHandlers[event]) {
+                eventHandlers[event] = [];
+            }
+
+            eventHandlers[event].push(handler);
+
+            return local;
+        }
+
+        function ignore(event) {
+            if (eventHandlers[event]) {
+                delete eventHandlers[event];
+            }
+
+            return local;
+        }
+        
+        function connect(src, chan) {
+            if (hasResponded(src)) {
+                return local;
+            }
+            
+            if (chan) {
+                sys.sendHtmlMessage(src, '<comm:connect></comm:connect>', chan);
+            } else {
+                sys.sendHtmlMessage(src, '<comm:connect></comm:connect>');
+            }
+            
+            return local;
+        }
+        
+        if (autoConnect) {
+            attach('afterLogIn', function (src) {
+                connect(src);
+            });
+        }
+        
+        attach('beforeChatMessage', function (src, message, channel) {
+            var content;
+            
+            if (message.substring(0, 5) === "comm:") {
+                content = message.substring(5);
+                
+                if (!hasResponded(src) && content === "received") {
+                    responded.push(src);
+                    antiDosTimers[src] = {messagesPerMinute: 1};
+                    _tell(src, 'connected', src);
+                } else {
+                    antiDosTimers[src] = antiDosTimers[src] || {messagesPerMinute: 1};
+                                        
+                    if ((++antiDosTimers[src].messagesPerMinute) > _antidosSetting('maxMessagesPerMinute', 30)) {
+                        emit(src, 'commBuiltinKick', 'Too much comm emits per minute. max: ' + _antidosSetting('maxMessagesPerMinute', 30));
+                        sys.kick(src);
+                        
+                        sys.stopEvent();
+                        return true;
+                    }
+                    
+                    if (content.indexOf("//") === -1) {
+                        content += "//";
+                    }
+                    
+                    if (eventHandlers[content.substring(0, content.indexOf("//"))]) {
+                        _tell.apply(local, [
+                            src,
+                            content.substr(0, content.indexOf("//"))
+                        ].concat(content.split("//").slice(1).map(function (value, index, array) {
+                            return value.replace(/%2F%2F/g, "//");
+                        })));
+                    }
+    
+                    if (content.substring(content.length - 2) === "//") {
+                        content = content.substring(0, content.length - 2);
+                    }
+                    
+                    _tell(src, 'message', content);
+                }
+
+                sys.stopEvent();
+                return true;
+            }
+        });
+        
+        return {
+            isClient: false,
+            isServer: true,
+            version: '0.8.1',
+            respondedPlayers: responded,
+            antidos: antiDosSettings,
+            attach: attach,
+            emit: emit,
+            listen: listen,
+            ignore: ignore,
+            connect: connect,
+            clearAntiDosTimers: clearAntiDosTimers
+        };
+    })({
+        'maxMessagesPerMinute': 30
+    }, false);
+}
+
+/*
+    in afterLogIn:
+        comm.connect(src);
+    anywhere else:
+        comm.listen('askforfood', function (src) {
+            comm.emit(src, 'food', 'cheese');
+        });
+*/
